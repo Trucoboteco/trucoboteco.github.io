@@ -890,7 +890,8 @@ body{font-size:14px; font-weight:500}
 .felt.short .forder{display:none}
 .felt.short .shoe{display:none}
 
-.felt.short .cross{top:56%}
+.felt .cross{top:48%}
+.felt.short .cross{top:52%}
 @media (max-width:420px){
   #actions{gap:6px}
   #actions .gb{padding:10px 11px; font-size:14.5px}
@@ -1171,6 +1172,14 @@ const firebaseConfig = {
   messagingSenderId: "400994356137",
   appId: "1:400994356137:web:22275b16e609a8472292b8"
 };
+// registro de erros do servidor (aparece em Minha conta → Diagnóstico)
+window.DBLOG = window.DBLOG || [];
+const logErr = (op, p, e) => {
+  const code = (e && (e.code || e.name)) || 'erro';
+  window.DBLOG.unshift(new Date().toLocaleTimeString('pt-BR') + ' · ' + op + ' ' + (p || '') + ' · ' + code + (e && e.message ? ' · ' + String(e.message).slice(0, 120) : ''));
+  window.DBLOG.length = Math.min(window.DBLOG.length, 25);
+  if (e && e.code) window.dispatchEvent(new CustomEvent('dberr', {detail: {op, p, code}}));
+};
 if (!window.DB){
   const VER = '10.14.1', U = m => `https://www.gstatic.com/firebasejs/${VER}/firebase-${m}.js`;
   try {
@@ -1192,8 +1201,8 @@ if (!window.DB){
       update: (p, d) => FS.updateDoc(R(p), d),
       del: p => FS.deleteDoc(R(p)),
       newId: c => FS.doc(C(c)).id,
-      listen: (p, cb) => FS.onSnapshot(R(p), s => cb(snap(s)), e => console.warn('listen', p, e)),
-      listenQ: (c, wh, cb) => FS.onSnapshot(Q(c, wh), s => cb(s.docs.map(snap)), e => console.warn('listenQ', c, e)),
+      listen: (p, cb) => FS.onSnapshot(R(p), s => cb(snap(s)), e => logErr('ouvir', p, e)),
+      listenQ: (c, wh, cb) => FS.onSnapshot(Q(c, wh), s => cb(s.docs.map(snap)), e => logErr('ouvir', c, e)),
       getQ: async (c, wh) => (await FS.getDocs(Q(c, wh))).docs.map(snap),
       tx: fn => FS.runTransaction(db, t => fn({
         get: async p => snap(await t.get(R(p))),
@@ -1201,6 +1210,11 @@ if (!window.DB){
         update: (p, d) => t.update(R(p), d)
       }))
     };
+    // toda operação que falhar fica registrada
+    for (const k of ['get', 'set', 'update', 'del', 'getQ', 'tx']){
+      const f = window.DB[k];
+      window.DB[k] = async (...a) => { try { return await f(...a); } catch(e){ logErr(k, typeof a[0] === 'string' ? a[0] : '', e); throw e; } };
+    }
   } catch(e){ console.error(e); window.DB_ERR = e; }
 }
 window.DB_READY = true;
@@ -1547,11 +1561,25 @@ function openAccount(){
   dialog('Minha conta', `${ME} · login ${CUR} · ${fmt(fichas)} fichas · ${wins} ${wins === 1 ? 'vitória' : 'vitórias'}`, [
     {label:'Trocar avatar ou foto', cls:'ok', fn: openAvatar},
     {label:'Trocar nome', cls:'no', fn: () => openAuth('rename')},
+    {label:'Diagnóstico', cls:'no', fn: showDiag},
     {label:'Sair da conta', cls:'no', fn: () => dialog('Sair da conta?', 'Suas fichas, vitórias e ranking ficam guardados. É só entrar de novo com seu login e senha, em qualquer celular.', [
       {label:'Sair', cls:'no', fn: logout}, {label:'Cancelar', cls:'ok'}])},
     {label:'Fechar', cls:'no'}
   ]);
 }
+const APP_VER = 'v2.1';
+function showDiag(){
+  const on = Object.keys(PRES).filter(u => u !== UID && isOn(u)).map(uName).join(', ') || 'ninguém';
+  const log = (window.DBLOG || []).slice(0, 8).join('\n') || 'Nenhum erro registrado.';
+  dialog('Diagnóstico', `Versão ${APP_VER} · login ${CUR} · conectado: ${window.DB ? 'sim' : 'não'}\nOnline agora: ${on}\nMesas abertas vistas: ${OPENT.length}\n\nErros:\n${log}`, [{label:'Fechar', cls:'ok'}]);
+  $('#dlgText').style.whiteSpace = 'pre-wrap'; $('#dlgText').style.textAlign = 'left'; $('#dlgText').style.fontSize = '12px';
+}
+let errT = 0;
+window.addEventListener('dberr', e => {
+  const c = String(e.detail.code || '');
+  if (Date.now() - errT < 4000) return; errT = Date.now();
+  toast(c.includes('permission') ? 'O servidor recusou uma ação (permissão). Veja Minha conta → Diagnóstico.' : c.includes('unavailable') ? 'Sem conexão com o servidor. Confira a internet.' : 'Erro no servidor: ' + c);
+});
 $('#editName').addEventListener('click', openAccount);
 $('#editName2').addEventListener('click', openAccount);
 
@@ -1659,7 +1687,7 @@ function toast(t){
   clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), 2200);
 }
 function dialog(title, text, buttons, prize){
-  $('#dlg').dataset.k = '';
+  $('#dlg').dataset.k = ''; $('#dlgText').style.cssText = '';
   $('#dlgTitle').textContent = title; $('#dlgText').textContent = text;
   const p = $('#dlgPrize');
   if (prize){ p.hidden = false; p.innerHTML = prize; } else p.hidden = true;
@@ -1685,6 +1713,7 @@ function setVar(k){
 const capOf = t => t.fmt === '1x1' ? 2 : 4;
 const ONLINE_MS = 75000;
 const isOn = uid => uid === UID || !!(PRES[uid] && PRES[uid].at > Date.now() - ONLINE_MS);
+const wasOn = (uid, ms) => uid === UID || !!(PRES[uid] && PRES[uid].at > Date.now() - ms);
 const uName = uid => uid === UID ? ME : (USERS[uid] && USERS[uid].name) || (PRES[uid] && PRES[uid].name) || 'Jogador';
 const uSt = uid => (PRES[uid] && PRES[uid].st) || 'livre';
 function seedOnline(){}
@@ -1704,7 +1733,7 @@ function renderOnline(){
 function renderLobby(){
   renderOnline();
   const box = $('#mesas'); if (!box || !UID) return;
-  const list = OPENT.filter(t => (t.host === UID || isOn(t.host)) && (!t.inv || t.inv === UID || t.host === UID))
+  const list = OPENT.filter(t => (t.host === UID || t.players.includes(UID) || (wasOn(t.host, 15 * 60000) && Date.now() - t.created < 2 * 3600000)) && (!t.inv || t.inv === UID || t.host === UID))
                     .sort((a, b) => (b.host === UID) - (a.host === UID) || a.created - b.created);
   $('#nmesas').textContent = list.length ? list.length + (list.length === 1 ? ' mesa' : ' mesas') : '';
   if (!list.length){
@@ -1715,7 +1744,7 @@ function renderLobby(){
   box.innerHTML = list.map(t => {
     const cap = capOf(t), VV = VARIANTS[t.var] || VARIANTS.mineiro, falta = Math.max(0, cap - t.players.length);
     const mine = t.players.includes(UID);
-    return `<div class="ev"><div><div class="top"><span class="st free">${falta ? `${falta} ${falta === 1 ? 'vaga' : 'vagas'}` : 'cheia'}</span><span>${t.fmt === '1x1' ? 'Mano a mano' : 'Duplas'} · ${VV.curto} · ${t.stake ? fmt(t.stake) + ' fichas' : 'sem fichas'}${t.liga ? ' · torneio' : ''}</span></div>
+    return `<div class="ev"><div><div class="top"><span class="st free">${falta ? `${falta} ${falta === 1 ? 'vaga' : 'vagas'}` : 'cheia'}</span><span>${t.fmt === '1x1' ? 'Mano a mano' : 'Duplas'} · ${VV.curto} · ${t.stake ? fmt(t.stake) + ' fichas' : 'sem fichas'}${t.liga ? ' · torneio' : ''}${t.host !== UID && !isOn(t.host) ? ' · dono fora do app' : ''}</span></div>
       <div class="teams"><div><span>Mesa de ${t.host === UID ? 'você' : esc(t.hostName)}</span></div><div><span class="avs">${t.players.map(u => `<i>${avatarHTML(uAv(u), (t.names && t.names[u]) || uName(u))}</i>`).join('')}${'<i class="emp">+</i>'.repeat(falta)}</span></div></div></div>
       <button class="odd" data-tid="${t.id}" aria-label="${mine ? 'Voltar pra mesa' : 'Entrar na mesa de ' + esc(t.hostName)}"><small>${t.players.length}/${cap}</small><b>${mine ? 'Voltar' : 'Entrar'}</b></button></div>`;
   }).join('');
@@ -1804,7 +1833,7 @@ function showWaitDlg(t){
   if (!WAIT || !t) return;
   const cap = capOf(t), host = t.host === UID;
   const who = t.players.map(u => u === UID ? 'você' : ((t.names && t.names[u]) || uName(u))).join(', ');
-  const txt = `${t.fmt === '1x1' ? 'Mano a mano' : 'Duplas'} · ${VARIANTS[t.var].nome}${t.stake ? ` · ${fmt(t.stake)} fichas cada` : ' · sem fichas'}. Na mesa ${t.players.length}/${cap}: ${who}. ${t.inv ? `Esperando ${uName(t.inv)} entrar…` : host ? 'Quem estiver online vê sua mesa e pode entrar.' : 'Esperando completar…'}`;
+  const txt = `${t.fmt === '1x1' ? 'Mano a mano' : 'Duplas'} · ${VARIANTS[t.var].nome}${t.stake ? ` · ${fmt(t.stake)} fichas cada` : ' · sem fichas'}. Na mesa ${t.players.length}/${cap}: ${who}. ${t.players.length >= cap && !host ? 'Mesa completa! Esperando o dono da mesa abrir o jogo…' : t.inv ? `Esperando ${uName(t.inv)} entrar…` : host ? 'Quem estiver online vê sua mesa e pode entrar. Deixe o app aberto.' : 'Esperando completar…'}`;
   if (!$('#dlg').hidden && $('#dlg').dataset.k === 'wait'){ $('#dlgText').textContent = txt; return; }
   if (!$('#dlg').hidden) return;   // outra janela aberta: atualiza depois
   dialog(host ? 'Sua mesa está aberta' : `Mesa de ${t.hostName}`, txt, host
@@ -1849,15 +1878,54 @@ async function startNetTable(tid, t, bots){
   } catch(e){ toast('Não deu pra começar: ' + e.message); }
   finally { startNetTable.busy = false; }
 }
-// mesas minhas que ficaram abertas de outra vez
+// ao abrir o app: volta pra mesa ou partida em que a pessoa estava (o celular pode ter recarregado a página)
 async function cleanupMyTables(){
-  try {
-    const mine = await DB.getQ('tables', [['host', '==', UID]]);
-    for (const t of mine){
-      if (t.status === 'open') await DB.del('tables/' + t.id);
-      else if (t.status === 'playing' && Date.now() - (t.started || t.created) > 3 * 3600000) await DB.update('tables/' + t.id, {status: 'done'});
+  let mine = [];
+  try { mine = await DB.getQ('tables', [['players', 'array-contains', UID]]); } catch(e){ console.warn('resume', e); return; }
+  const now = Date.now();
+  mine.sort((a, b) => (b.started || b.created) - (a.started || a.created));
+  for (const t of mine){
+    if (t.status === 'open'){
+      if (now - t.created > 2 * 3600000){ if (t.host === UID) DB.del('tables/' + t.id).catch(() => {}); continue; }
+      if (!WAIT && !NET) waitRoom(t.id);
+    } else if (t.status === 'playing'){
+      if (now - (t.started || t.created) > 3 * 3600000){ if (t.host === UID) DB.update('tables/' + t.id, {status: 'done'}).catch(() => {}); continue; }
+      if (!WAIT && !NET){ toast('Voltando pra sua partida…'); if (t.host === UID) hostResume(t.id, t); else enterNet(t.id, t); }
     }
-  } catch(e){ console.warn('cleanup', e); }
+  }
+}
+async function hostResume(tid, t){
+  let p = null;
+  try { p = await DB.get(`tables/${tid}/priv/${UID}`); } catch(e){}
+  let S = null; try { S = p && p.host ? JSON.parse(p.host) : null; } catch(e){}
+  if (!S || !S.G){ DB.update('tables/' + tid, {status: 'done'}).catch(() => {}); return toast('Não deu pra retomar sua partida anterior.'); }
+  enterNet(tid, t, S);
+}
+// continua o jogo do ponto em que parou (os timers se perdem quando a página recarrega)
+function netResumeFlow(){
+  clearTimers();
+  G.tKey = null; G.flying = {};
+  if (G.over) return netEndGame(G.winTeam || (G.score.A >= G.score.B ? 'A' : 'B'));
+  if (G.handOver){
+    if (G.score.A >= V.target || G.score.B >= V.target){ G.over = true; render(); return netEndGame(G.score.A >= G.score.B ? 'A' : 'B'); }
+    render(); const hid = G.handId;
+    return later(() => { if (G.handId === hid && !G.over){ G.mao = nextSeat(G.mao); newHand(); } }, 1500);
+  }
+  if (G.phase === 'shuffle'){ render(); if (isBot(G.dealer)) later(() => { if (G.phase === 'shuffle') deal(); }, 1200); return; }
+  if (G.resolving){ render(); const hid = G.handId; return later(() => afterTrick(hid), 900); }
+  if (G.busy && G.playOrder.length >= ACTIVE().length) return resolveTrick();
+  const human = t => teamSeats(t).some(x => isHuman(x) || isRemote(x));
+  if (G.pending){ render(); if (!human(otherTeam(G.pending.team))) later(botRespond, 1500); return; }
+  if (G.epend){ render(); if (!human(otherTeam(G.epend.team))) later(botEnvRespond, 1500); return; }
+  if (G.busy && G.maoDe10 && !G.decide10){
+    const t = G.maoDe10, sp = V.special;
+    render();
+    return later(() => {
+      if (teamPower(t) > 0.5){ say(`${teamNames(t)} ${vb('vai','vão')} jogar. Vale ${sp.play}.`); G.busy = false; proceed(); }
+      else endHand(otherTeam(t), sp.run, `${teamNames(t)} ${vb('correu','correram')} na mão de ${sp.at}. +${sp.run} pra ${teamNames(otherTeam(t))}.`);
+    }, 1000);
+  }
+  proceed();
 }
 
 function train(fmt){ netDone(); if (NET || WAIT) return toast('Saia da mesa em que você está antes de treinar.'); FORMAT = fmt; sit({n:'Treino contra bots', e:0, treino:true}); }
@@ -1875,7 +1943,7 @@ function simpleEnd(won){
 function seatOfUid(uid){ if (!NET) return -1; if (NET.fmt === '1x1') return uid === NET.uidAt[0] ? 0 : 2; return NET.uidAt.indexOf(uid); }
 const seatAv = s => seats[s] && seats[s].uid ? uAv(seats[s].uid) : avatarOf(seats[s].name);
 const sigObj = k => k ? SINAIS.find(x => x.k === k) || null : null;
-function enterNet(tid, t){
+function enterNet(tid, t, S){
   const host = t.host === UID, sm = t.seatMap;
   const seat = host ? 0 : (t.fmt === '1x1' ? 2 : sm.findIndex(x => x.uid === UID));
   if (seat < 0) return toast('Você não está nessa mesa.');
@@ -1893,9 +1961,16 @@ function enterNet(tid, t){
   if (host){
     seats = sm.map((x, s) => ({name: x.name, uid: x.uid, you: s === 0}));
     G = null; openGame();
-    newGame(0, 0);
-    say(M.duo ? `Mano a mano contra ${nm(2)}.` : `Mesa completa! Parceiro de ${ME}: ${nm(2)}.`);
-    render();
+    if (S){
+      // retomando: estado salvo pelo próprio dono da mesa
+      G = S.G; Object.assign(NET, {v: S.net.v || 0, evId: S.net.evId || 0, ev: S.net.ev || [], seen: S.net.seen || {}, miss: {}, woUid: S.net.woUid || null});
+      say('Partida retomada.');
+      netResumeFlow();
+    } else {
+      newGame(0, 0);
+      say(M.duo ? `Mano a mano contra ${nm(2)}.` : `Mesa completa! Parceiro de ${ME}: ${nm(2)}.`);
+      render();
+    }
     NET.unsub = DB.listen('tables/' + tid, hostOnTable);
   } else {
     seats = [0, 1, 2, 3].map(r => { const x = sm[(r + seat) % 4]; return {name: x.name, uid: x.uid, you: r === 0}; });
@@ -1955,7 +2030,12 @@ function netPriv(s){
 function netFlush(){
   if (!NET || NET.role !== 'host' || !G) return;
   const st = netSnap();
+  NET.lastFlush = Date.now();
   DB.update('tables/' + NET.tid, {st}).catch(e => console.warn('push', e));
+  try {
+    const save = JSON.stringify({G: {...G, flying: null, tKey: null}, net: {v: NET.v, evId: NET.evId, ev: NET.ev, seen: NET.seen, woUid: NET.woUid || null}});
+    if (save !== NET.lastSave){ NET.lastSave = save; DB.set(`tables/${NET.tid}/priv/${UID}`, {host: save, at: Date.now()}).catch(e => console.warn('save', e)); }
+  } catch(e){ console.warn(e); }
   NET.remote.forEach(s => {
     const uid = NET.uidAt[s]; if (!uid) return;
     const p = netPriv(s), key = JSON.stringify(p);
@@ -2033,7 +2113,7 @@ function netQuit(s){
 }
 async function netEndGame(win){
   if (!NET || NET.role !== 'host' || NET.ended) return;
-  NET.ended = true; clearTimers();
+  NET.ended = true; clearTimers(); G.winTeam = win;
   const uidsOf = t => [...new Set(teamSeats(t).map(s => NET.uidAt[s]).filter(Boolean))];
   const W = uidsOf(win), L = uidsOf(otherTeam(win));
   const tid = NET.tid, t = NET.t, stake = t.botfill ? 0 : (t.stake || 0);
@@ -2152,8 +2232,12 @@ function guestSend(a){
 }
 // o host sumiu? (sem atualização por muito tempo)
 setInterval(() => {
-  if (NET && NET.role === 'guest' && !NET.ended && Date.now() - NET.lastSnap > ONLINE_MS)
-    netGone('O dono da mesa saiu ou perdeu a conexão. A partida foi cancelada: ninguém ganhou nem perdeu fichas.');
+  // dono: sinal de vida pros outros mesmo sem jogada
+  if (NET && NET.role === 'host' && !NET.ended && G && Date.now() - (NET.lastFlush || 0) > 15000) netFlush();
+  if (!NET || NET.role !== 'guest' || NET.ended) return;
+  const quiet = Date.now() - NET.lastSnap;
+  if (quiet > 180000) netGone('O dono da mesa saiu ou perdeu a conexão. A partida foi cancelada: ninguém ganhou nem perdeu fichas.');
+  else if (quiet > 35000) say(`Esperando ${seats[NET.fmt === '1x1' ? 2 : (4 - NET.seat) % 4].name} (dono da mesa) voltar pro app… ${Math.round(quiet / 1000)}s`);
 }, 5000);
 /* ---------- torneio de pontos corridos (online) ---------- */
 function loadLiga(){}
@@ -2641,7 +2725,7 @@ function fitGame(){
   const H = window.innerHeight, W = game.clientWidth || window.innerWidth;
   const compact = H < 640;
   game.classList.toggle('compact', compact);
-  const hcw = Math.round(Math.max(50, Math.min(86, W * .2, H * (compact ? .095 : .105))));
+  const hcw = Math.round(Math.max(46, Math.min(72, W * .17, H * (compact ? .08 : .088))));
   const root = document.documentElement.style;
   root.setProperty('--hcw', hcw + 'px');
   const topH = $('.gtop').offsetHeight + 4;
@@ -2653,7 +2737,7 @@ function fitGame(){
   const fw = Math.min(W - 10, 460);
   const fh = Math.round(Math.max(170, Math.min(avail, fw * 1.02)));
   root.setProperty('--fh', fh + 'px');
-  root.setProperty('--fcs', Math.round(Math.max(36, Math.min(64, (fh * .9 - 8) / 4.4))) + 'px');
+  root.setProperty('--fcs', Math.round(Math.max(34, Math.min(54, W * .14, (fh - 92) / 4.1))) + 'px');
   $('#felt').classList.toggle('short', fh < 270);
 }
 window.addEventListener('resize', fitGame);
@@ -2852,8 +2936,12 @@ function resolveTrick(){
   say(ws !== null ? `${nm(ws)} fez a vaza.` : 'As duplas empataram a vaza.');
   render();
   const thid = G.handId;
-  later(() => {
-    if (G.handId !== thid || G.handOver) return;
+  G.resolving = true; G.resWs = ws;
+  later(() => afterTrick(thid), 1100);
+}
+function afterTrick(thid){
+    if (!G || G.handId !== thid || G.handOver || !G.resolving) return;
+    G.resolving = false; const ws = G.resWs;
     G.table = [null,null,null,null]; G.playOrder = []; G.winSlot = null; G.busy = false;
     const w = handWinner(G.tricks);
     if (w === 'none' && V.envido){ const t = teamOf(G.mao); return endHand(t, G.value, `Três vazas empatadas: no gaúcho, quem é mão leva. +${G.value} pra ${teamNames(t)}.`); }
@@ -2862,7 +2950,6 @@ function resolveTrick(){
     if (ws !== null) G.leader = ws;
     G.turn = G.leader;
     proceed();
-  }, 1100);
 }
 function endHand(team, pts, msg){
   if (G.handOver) return;
@@ -3346,7 +3433,7 @@ function decide10Go(play){
 }
 function onTimeout(s = 0){
   const me = s === 0;
-  if (isRemote(s)){ NET.miss[s] = (NET.miss[s] || 0) + 1; if (NET.miss[s] >= 4) return netQuit(s); }
+  if (isRemote(s)){ NET.miss[s] = (NET.miss[s] || 0) + 1; if (NET.miss[s] >= 5) return netQuit(s); }
   if (G.phase === 'shuffle'){ if (me) toast('Tempo esgotado: as cartas foram dadas.'); deal(); return; }
   if (G.decide10){ if (me) toast('Tempo esgotado: vão jogar a mão.'); decide10Go(true); return; }
   if (G.epend && teamOf(s) !== G.epend.team){ if (me) toast('Tempo esgotado: não quero.'); respondEnvido('no', s); return; }
