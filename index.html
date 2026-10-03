@@ -1193,6 +1193,7 @@ if (!window.DB){
     window.DB = {
       onAuth: cb => AU.onAuthStateChanged(auth, u => cb(u ? {uid: u.uid} : null)),
       uid: () => auth.currentUser ? auth.currentUser.uid : null,
+      email: () => auth.currentUser ? auth.currentUser.email : null,
       signUp: async (email, pass, keep) => { await persist(keep); return (await AU.createUserWithEmailAndPassword(auth, email, pass)).user.uid; },
       signIn: async (email, pass, keep) => { await persist(keep); return (await AU.signInWithEmailAndPassword(auth, email, pass)).user.uid; },
       signOut: () => AU.signOut(auth),
@@ -1343,6 +1344,8 @@ function lsGet(k, d){ try { const v = localStorage.getItem(k); return v === null
 function lsSet(k, v){ try { localStorage.setItem(k, v); } catch(e){} }
 function lsDel(k){ try { localStorage.removeItem(k); } catch(e){} }
 const EMAIL_DOM = '@trucodoboteco.app';
+const ADMINS = ['fernando'];
+const isAdmin = () => !!CUR && ADMINS.includes(CUR);
 const seasonKey = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); };
 const NAME_OK = n => n.length >= 2 && n.length <= 14 && !/[<>&"]/.test(n);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1429,9 +1432,18 @@ async function startSession(uid){
   let u = null;
   try { u = await DB.get('users/' + uid); } catch(e){ console.warn(e); }
   if (UID !== uid) return;
+  let ban = null;
+  try { ban = await DB.get('bans/' + uid); } catch(e){}
+  if (ban){
+    UID = null; PENDING = null;
+    try { await DB.signOut(); } catch(e){}
+    return dialog('Conta removida', 'Essa conta foi removida pelo administrador do Truco do Boteco.', [{label:'Ok', cls:'ok', fn: () => openAuth('login')}]);
+  }
   const novo = !u;
   if (!u){
-    const p = PENDING || {name: 'Jogador', login: 'jogador'};
+    const lg = ((DB.email && DB.email()) || '').split('@')[0] || 'jogador';
+    const p = PENDING || {name: lg.slice(0, 14).padEnd(2, '_'), login: lg};
+    if (p.login !== lg) p.login = lg;
     u = {name: p.name, login: p.login, avatar: null, fichas: 1000, wins: 0, losses: 0, sw: 0, sl: 0, season: seasonKey(), hist: [], created: Date.now()};
     try { await DB.set('users/' + uid, u); }
     catch(e){ toast('Erro ao criar sua conta: ' + e.message); }
@@ -1441,6 +1453,7 @@ async function startSession(uid){
   lsSet('truco_had', '1');
   applyUser(u);
   UNSUB.push(DB.listen('users/' + uid, d => { if (d && UID === uid) applyUser(d); }));
+  UNSUB.push(DB.listen('bans/' + uid, async b => { if (b && UID === uid){ await logout(); dialog('Conta removida', 'Essa conta foi removida pelo administrador do Truco do Boteco.', [{label:'Ok', cls:'ok'}]); } }));
   UNSUB.push(DB.listenQ('users', [], list => { USERS = Object.fromEntries(list.map(x => [x.id, x])); if (USER && !USERS[UID]) USERS[UID] = USER; renderOnline(); if (VIEW === 'rank') renderRanking(); if (VIEW === 'tour') renderLiga(); }));
   UNSUB.push(DB.listenQ('presence', [], list => { PRES = Object.fromEntries(list.map(x => [x.id, x])); renderLobby(); }));
   UNSUB.push(DB.listenQ('tables', [['status', '==', 'open']], list => { OPENT = list; renderLobby(); }));
@@ -1567,7 +1580,7 @@ function openAccount(){
     {label:'Fechar', cls:'no'}
   ]);
 }
-const APP_VER = 'v2.1';
+const APP_VER = 'v2.2';
 function showDiag(){
   const on = Object.keys(PRES).filter(u => u !== UID && isOn(u)).map(uName).join(', ') || 'ninguém';
   const log = (window.DBLOG || []).slice(0, 8).join('\n') || 'Nenhum erro registrado.';
@@ -1733,7 +1746,7 @@ function renderOnline(){
 function renderLobby(){
   renderOnline();
   const box = $('#mesas'); if (!box || !UID) return;
-  const list = OPENT.filter(t => (t.host === UID || t.players.includes(UID) || (wasOn(t.host, 15 * 60000) && Date.now() - t.created < 2 * 3600000)) && (!t.inv || t.inv === UID || t.host === UID))
+  const list = OPENT.filter(t => (t.host === UID || t.players.includes(UID) || (wasOn(t.host, 120000) && Date.now() - t.created < 2 * 3600000)) && (!t.inv || t.inv === UID || t.host === UID))
                     .sort((a, b) => (b.host === UID) - (a.host === UID) || a.created - b.created);
   $('#nmesas').textContent = list.length ? list.length + (list.length === 1 ? ' mesa' : ' mesas') : '';
   if (!list.length){
@@ -1746,7 +1759,7 @@ function renderLobby(){
     const mine = t.players.includes(UID);
     return `<div class="ev"><div><div class="top"><span class="st free">${falta ? `${falta} ${falta === 1 ? 'vaga' : 'vagas'}` : 'cheia'}</span><span>${t.fmt === '1x1' ? 'Mano a mano' : 'Duplas'} · ${VV.curto} · ${t.stake ? fmt(t.stake) + ' fichas' : 'sem fichas'}${t.liga ? ' · torneio' : ''}${t.host !== UID && !isOn(t.host) ? ' · dono fora do app' : ''}</span></div>
       <div class="teams"><div><span>Mesa de ${t.host === UID ? 'você' : esc(t.hostName)}</span></div><div><span class="avs">${t.players.map(u => `<i>${avatarHTML(uAv(u), (t.names && t.names[u]) || uName(u))}</i>`).join('')}${'<i class="emp">+</i>'.repeat(falta)}</span></div></div></div>
-      <button class="odd" data-tid="${t.id}" aria-label="${mine ? 'Voltar pra mesa' : 'Entrar na mesa de ' + esc(t.hostName)}"><small>${t.players.length}/${cap}</small><b>${mine ? 'Voltar' : 'Entrar'}</b></button></div>`;
+      <button class="odd" data-tid="${t.id}" aria-label="${mine ? 'Voltar pra mesa' : 'Entrar na mesa de ' + esc(t.hostName)}"><small>${t.players.length}/${cap}</small><b>${mine ? 'Voltar' : 'Entrar'}</b></button>${isAdmin() && t.host !== UID ? `<button class="odd del" data-deltid="${t.id}" aria-label="Excluir mesa"><small>admin</small><b>Excluir</b></button>` : ''}</div>`;
   }).join('');
 }
 function renderDesafios(){}
@@ -1883,23 +1896,41 @@ async function cleanupMyTables(){
   let mine = [];
   try { mine = await DB.getQ('tables', [['players', 'array-contains', UID]]); } catch(e){ console.warn('resume', e); return; }
   const now = Date.now();
-  mine.sort((a, b) => (b.started || b.created) - (a.started || a.created));
+  const lastOf = t => Math.max((t.st && t.st.at) || 0, t.started || 0, t.created || 0);
+  mine.sort((a, b) => lastOf(b) - lastOf(a));
+  let asked = false;
   for (const t of mine){
     if (t.status === 'open'){
-      if (now - t.created > 2 * 3600000){ if (t.host === UID) DB.del('tables/' + t.id).catch(() => {}); continue; }
-      if (!WAIT && !NET) waitRoom(t.id);
+      // mesa esperando jogador: só volta se for recente
+      if (now - t.created > 10 * 60000){
+        if (t.host === UID) DB.del('tables/' + t.id).catch(() => {});
+        else DB.tx(async tx => { const x = await tx.get('tables/' + t.id); if (!x || x.status !== 'open') return; const names = {...(x.names || {})}; delete names[UID]; tx.update('tables/' + t.id, {players: x.players.filter(u => u !== UID), names}); }).catch(() => {});
+        continue;
+      }
+      if (!WAIT && !NET && !asked) waitRoom(t.id);
     } else if (t.status === 'playing'){
-      if (now - (t.started || t.created) > 3 * 3600000){ if (t.host === UID) DB.update('tables/' + t.id, {status: 'done'}).catch(() => {}); continue; }
-      if (!WAIT && !NET){ toast('Voltando pra sua partida…'); if (t.host === UID) hostResume(t.id, t); else enterNet(t.id, t); }
+      // partida parada há mais de 5 minutos: encerra sem mexer em fichas
+      if (now - lastOf(t) > 5 * 60000){ if (t.host === UID) DB.update('tables/' + t.id, {status: 'done'}).catch(() => {}); continue; }
+      if (WAIT || NET || asked) continue;
+      asked = true;
+      const quem = t.host === UID ? 'sua mesa' : 'mesa de ' + t.hostName;
+      dialog('Partida em andamento', `Você estava jogando na ${quem} (${VARIANTS[t.var].curto} · ${t.fmt}${t.stake && !t.botfill ? ` · ${fmt(t.stake)} fichas` : ''}). Quer voltar pra partida?`, [
+        {label:'Voltar pra partida', cls:'ok', fn: () => { if (t.host === UID) hostResume(t.id, t); else enterNet(t.id, t); }},
+        {label:'Sair (conta como derrota)', cls:'no', fn: () => {
+          if (t.host === UID) hostResume(t.id, t, true);
+          else DB.update('tables/' + t.id, {['acts.' + UID]: {a: 'quit', n: Date.now()}}).then(() => toast('Você saiu da partida.')).catch(() => {});
+        }}
+      ]);
     }
   }
 }
-async function hostResume(tid, t){
+async function hostResume(tid, t, quit){
   let p = null;
   try { p = await DB.get(`tables/${tid}/priv/${UID}`); } catch(e){}
   let S = null; try { S = p && p.host ? JSON.parse(p.host) : null; } catch(e){}
   if (!S || !S.G){ DB.update('tables/' + tid, {status: 'done'}).catch(() => {}); return toast('Não deu pra retomar sua partida anterior.'); }
   enterNet(tid, t, S);
+  if (quit && NET && NET.role === 'host') netQuit(0);
 }
 // continua o jogo do ponto em que parou (os timers se perdem quando a página recarrega)
 function netResumeFlow(){
@@ -2239,6 +2270,32 @@ setInterval(() => {
   if (quiet > 180000) netGone('O dono da mesa saiu ou perdeu a conexão. A partida foi cancelada: ninguém ganhou nem perdeu fichas.');
   else if (quiet > 35000) say(`Esperando ${seats[NET.fmt === '1x1' ? 2 : (4 - NET.seat) % 4].name} (dono da mesa) voltar pro app… ${Math.round(quiet / 1000)}s`);
 }, 5000);
+
+/* ---------- administrador ---------- */
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-deltid]'); if (!b || !isAdmin()) return;
+  const tid = b.dataset.deltid, t = OPENT.find(x => x.id === tid);
+  dialog('Excluir mesa?', `A mesa de ${t ? t.hostName : 'alguém'} some da lista. Ninguém perde fichas.`, [
+    {label:'Excluir', cls:'no', fn: () => DB.del('tables/' + tid).then(() => toast('Mesa excluída.')).catch(x => toast('Não deu: ' + x.message))},
+    {label:'Cancelar', cls:'ok'}]);
+});
+async function adminRemove(uid){
+  if (!isAdmin() || uid === UID) return;
+  const nome = uName(uid);
+  dialog('Excluir jogador?', `${nome} sai do ranking e da lista de jogadores e não consegue mais entrar com essa conta. Isso não tem como desfazer pelo app.`, [
+    {label:`Excluir ${nome}`, cls:'no', fn: async () => {
+      try {
+        await DB.set('bans/' + uid, {at: Date.now(), by: UID, name: nome});
+        await DB.del('users/' + uid);
+        DB.del('presence/' + uid).catch(() => {});
+        for (const t of OPENT.filter(x => x.host === uid)) DB.del('tables/' + t.id).catch(() => {});
+        delete USERS[uid]; delete PRES[uid];
+        renderLobby(); if (VIEW === 'rank') renderRanking();
+        toast(`${nome} foi excluído.`);
+      } catch(x){ toast('Não deu pra excluir: ' + (x.code || x.message) + '. Confira se as regras novas foram publicadas.'); }
+    }},
+    {label:'Cancelar', cls:'ok'}]);
+}
 /* ---------- torneio de pontos corridos (online) ---------- */
 function loadLiga(){}
 function saveLiga(){}
@@ -2537,6 +2594,9 @@ function openProfile(k, role, opts){
   const rows = rankRows(), pos = rows.findIndex(r => r.k === k) + 1, r = rows[pos - 1] || {w:0, l:0, t:0, h:[]};
   const canDuel = opts && 'duel' in opts ? opts.duel : (!me && !NET && !WAIT && isFree(k));
   $('#pfDuel').hidden = !canDuel;
+  let rm = $('#pfRemove');
+  if (!rm){ rm = document.createElement('button'); rm.id = 'pfRemove'; rm.className = 'gb no'; rm.textContent = 'Excluir jogador (admin)'; $('#pfClose').before(rm); rm.addEventListener('click', () => { $('#pfDlg').hidden = true; adminRemove(PFN); }); }
+  rm.hidden = !(isAdmin() && !me);
   const tot = r.w + r.l, pct = tot ? Math.round(r.w / tot * 100) : 0;
   const st = me ? '' : isOn(k) ? ` · ${uSt(k) === 'jogando' ? 'jogando agora' : uSt(k) === 'mesa' ? 'numa mesa' : 'online'}` : ' · offline';
   $('#pfAv').innerHTML = avatarHTML(uAv(k), u.name);
