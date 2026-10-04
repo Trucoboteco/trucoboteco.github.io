@@ -927,6 +927,26 @@ body{font-size:14px; font-weight:500}
 .eye[aria-pressed="true"] .e-off{display:block}
 .forget{justify-self:start; border:0; background:none; padding:0; color:var(--orange-hi); font-size:12px; font-weight:600; cursor:pointer; text-decoration:underline}
 .onnone{align-self:center; font-size:12.5px; color:var(--mut, #8b97b0); padding:0 6px; white-space:normal; max-width:200px}
+
+/* ===== carta de baralho de verdade ===== */
+.card:not(.small):not(.back) .r, .card:not(.small):not(.back) .s, .card:not(.small):not(.back) .pip{display:none}
+.card.small .ci, .card.small .pp, .card.small .fc{display:none}
+.card .ci{position:absolute; display:flex; flex-direction:column; align-items:center; line-height:.9; font-family:var(--body)}
+.card .ci b{font-size:calc(var(--cw) * .2); font-weight:700; letter-spacing:-.04em}
+.card .ci i{font-style:normal; font-size:calc(var(--cw) * .15); margin-top:1px}
+.card .ci.tl{top:calc(var(--cw) * .05); left:calc(var(--cw) * .06)}
+.card .ci.br{bottom:calc(var(--cw) * .05); right:calc(var(--cw) * .06); transform:rotate(180deg)}
+.card .pp{position:absolute; top:21%; bottom:21%; left:34%; right:34%}
+.card .pp i{position:absolute; font-style:normal; font-family:var(--body); font-size:calc(var(--cw) * .17); line-height:1; transform:translate(-50%, -50%)}
+.card .pp i.dn{transform:translate(-50%, -50%) rotate(180deg)}
+.card .pp.ace i{font-size:calc(var(--cw) * .5)}
+.card .fc{position:absolute; top:17%; bottom:17%; left:21%; right:21%; border:1.5px solid currentColor; border-radius:4px; display:grid; place-items:center;
+  background:linear-gradient(180deg, rgba(255,214,102,.28), rgba(255,214,102,.08) 50%, rgba(255,214,102,.28))}
+.card .fc .fg{font-size:calc(var(--cw) * .44); line-height:1; font-family:'Segoe UI Symbol','Apple Symbols','DejaVu Sans',serif}
+.card .fc i{position:absolute; font-style:normal; font-size:calc(var(--cw) * .13); line-height:1}
+.card .fc .f1{top:2px; left:3px} .card .fc .f2{bottom:2px; right:3px; transform:rotate(180deg)}
+.card .man{z-index:2}
+.felt .cross{top:var(--crossY, 48%) !important}
 </style>
 
 <div class="app">
@@ -1580,7 +1600,7 @@ function openAccount(){
     {label:'Fechar', cls:'no'}
   ]);
 }
-const APP_VER = 'v2.2';
+const APP_VER = 'v2.3';
 function showDiag(){
   const on = Object.keys(PRES).filter(u => u !== UID && isOn(u)).map(uName).join(', ') || 'ninguém';
   const log = (window.DBLOG || []).slice(0, 8).join('\n') || 'Nenhum erro registrado.';
@@ -2799,6 +2819,17 @@ function fitGame(){
   root.setProperty('--fh', fh + 'px');
   root.setProperty('--fcs', Math.round(Math.max(34, Math.min(54, W * .14, (fh - 92) / 4.1))) + 'px');
   $('#felt').classList.toggle('short', fh < 270);
+  requestAnimationFrame(() => {
+    const felt = $('#felt'), top = document.querySelector('#seat-2 .who'), bot = document.querySelector('#seat-0 .who');
+    if (!felt || !top || !bot || $('#game').hidden) return;
+    const fr = felt.getBoundingClientRect(), tb = top.getBoundingClientRect().bottom - fr.top, bt = bot.getBoundingClientRect().top - fr.top;
+    const avail = bt - tb - 12;
+    if (avail < 60) return;
+    const rows = G && !G.duo ? 4.6 : 3.75;   // 2x2: três linhas de cartas; 1x1: a do meio é só a vira
+    const cs = Math.round(Math.max(30, Math.min(56, W * .145, (avail - 14) / rows)));
+    root.setProperty('--fcs', cs + 'px');
+    root.setProperty('--crossY', Math.round((tb + bt) / 2) + 'px');
+  });
 }
 window.addEventListener('resize', fitGame);
 window.addEventListener('orientationchange', () => setTimeout(fitGame, 200));
@@ -3527,8 +3558,16 @@ function bubble(s, text, sig){
   const el = $('#bub-' + s); el.textContent = text; el.classList.toggle('sig', !!sig); el.classList.add('show');
   clearTimeout(bubT[s]); bubT[s] = setTimeout(() => el.classList.remove('show'), sig ? 2600 : 1800);
 }
+const PIPS = {A:[[50,50]], '2':[[50,0],[50,100]], '3':[[50,0],[50,50],[50,100]], '4':[[0,0],[100,0],[0,100],[100,100]],
+  '5':[[0,0],[100,0],[50,50],[0,100],[100,100]], '6':[[0,0],[100,0],[0,50],[100,50],[0,100],[100,100]],
+  '7':[[0,0],[100,0],[50,25],[0,50],[100,50],[0,100],[100,100]]};
+const FACES = {J:'\u265E\uFE0E', Q:'\u265B\uFE0E', K:'\u265A\uFE0E'};
 function cardHTML(c){
-  return `<span class="r">${c.r}</span><span class="s">${c.s}</span><span class="pip">${c.s}</span>${c.man ? `<span class="man">${c.man}</span>` : ''}`;
+  const idx = `<b>${c.r}</b><i>${c.s}</i>`;
+  const body = FACES[c.r]
+    ? `<span class="fc"><span class="fg">${FACES[c.r]}</span><i class="f1">${c.s}</i><i class="f2">${c.s}</i></span>`
+    : `<span class="pp${c.r === 'A' ? ' ace' : ''}">${(PIPS[c.r] || [[50,50]]).map(([x, y]) => `<i style="left:${x}%;top:${y}%"${y > 50 ? ' class="dn"' : ''}>${c.s}</i>`).join('')}</span>`;
+  return `<span class="r">${c.r}</span><span class="s">${c.s}</span><span class="pip">${c.s}</span><span class="ci tl">${idx}</span><span class="ci br">${idx}</span>${body}${c.man ? `<span class="man">${c.man}</span>` : ''}`;
 }
 function feltOrder(){
   const base = '3 2 A K J Q 7 6 5 4';
